@@ -1,0 +1,36 @@
+<!--
+  Конфигурация WinSW v2.12.0 (https://github.com/winsw/winsw/releases/tag/v2.12.0).
+  Файл WinSW-x64.exe переименовывается в QuikMonitor.exe и кладётся рядом с этим XML.
+  Служба запускает портативный Node.js из папки runtime\ — Node.js не устанавливается в систему.
+-->
+<service>
+  <id>QuikMonitor</id>
+  <name>QUIK Server Monitor</name>
+  <description>Read-only мониторинг сервера QUIK с уведомлениями в Telegram. Не управляет QUIK.</description>
+
+  <executable>%BASE%\..\runtime\node.exe</executable>
+  <arguments>--disable-warning=ExperimentalWarning --max-old-space-size=256 "%BASE%\..\dist\index.js"</arguments>
+  <workingdirectory>%BASE%\..</workingdirectory>
+
+  <!-- Автозапуск после загрузки Windows. install-service.ps1 дополнительно включает
+       отложенный старт (delayed-auto) — после запуска сети и служб QUIK. -->
+  <startmode>Automatic</startmode>
+
+  <!-- Перезапуск при аварийном завершении процесса монитора -->
+  <onfailure action="restart" delay="10 sec"/>
+  <onfailure action="restart" delay="30 sec"/>
+  <onfailure action="restart" delay="60 sec"/>
+  <resetfailure>1 hour</resetfailure>
+
+  <!-- Корректная остановка: Ctrl+C -> приложение отправляет «остановлен» и закрывает БД -->
+  <stoptimeout>20 sec</stoptimeout>
+
+  <priority>Normal</priority>
+
+  <!-- stdout/stderr (основные логи пишет само приложение в logs\) -->
+  <logpath>%BASE%\..\logs</logpath>
+  <log mode="roll-by-size">
+    <sizeThreshold>5120</sizeThreshold>
+    <keepFiles>3</keepFiles>
+  </log>
+</service>

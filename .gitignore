@@ -1,0 +1,11 @@
+node_modules/
+dist/
+release/
+runtime/
+data/
+logs/
+.env
+config/config.json
+service/QuikMonitor.exe
+service/*.wrapper.log
+*.log
