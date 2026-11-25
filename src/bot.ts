@@ -2,7 +2,7 @@ import type { Agent } from 'node:https';
 import { HttpsProxyAgent } from 'https-proxy-agent';
 import { Telegraf, Telegram, type Context, type MiddlewareFn } from 'telegraf';
 import { errMsg, type Logger } from './logger.js';
-import { findServices, isValidServiceName, queryService, stateRu, type ServiceStore } from './services.js';
+import { findServices, isValidServiceName, queryService, ServiceQueryError, stateRu, type ServiceState, type ServiceStore } from './services.js';
 import type { Transition, Watcher } from './watcher.js';
 
 export interface BotOptions {
@@ -10,6 +10,8 @@ export interface BotOptions {
   adminIds: number[];
   proxyUrl?: string;
   serverName: string;
+  /** Удалённый сервер, службы которого проверяются; undefined — этот компьютер */
+  targetHost?: string;
   timezone: string;
   log: Logger;
 }
@@ -37,6 +39,11 @@ export function fmtDuration(ms: number): string {
 }
 
 export function formatTransition(t: Transition, serverName: string, tz: string): string {
+  if (t.host) {
+    const srv = `${esc(serverName)} (<code>${esc(t.service.name)}</code>)`;
+    if (t.kind === 'down') return [`🔴 <b>Сервер недоступен</b>`, `Сервер: ${srv}`, `Состояние служб неизвестно`, `Время: ${fmtTime(t.at, tz)}`].join('\n');
+    return [`🟢 <b>Сервер снова доступен</b>`, `Сервер: ${srv}`, `Время: ${fmtTime(t.at, tz)}`, `Недоступен был: ${fmtDuration(t.at - t.downSince)}`].join('\n');
+  }
   const svc = `<b>${esc(t.service.label)}</b> (<code>${esc(t.service.name)}</code>)`;
   if (t.kind === 'down') {
     return [`🔴 <b>Служба не работает</b>`, `Сервер: ${esc(serverName)}`, `Служба: ${svc}`, `Состояние: ${stateRu(t.state)}`, `Время: ${fmtTime(t.at, tz)}`].join('\n');
@@ -118,9 +125,26 @@ export class CommandBot {
     private readonly watcher: Watcher,
   ) {}
 
+  private get serverTitle(): string {
+    const host = this.opts.targetHost;
+    return `<b>${esc(this.opts.serverName)}</b>${host ? ` (<code>${esc(host)}</code>)` : ''}`;
+  }
+
+  /** Подсказка, когда к серверу нет доступа */
+  private accessHint(state: ServiceState): string | undefined {
+    const host = this.opts.targetHost;
+    if (state === 'UNREACHABLE') return `❌ Сервер ${this.serverTitle} не отвечает. Проверьте, что он включён и доступен по сети.`;
+    if (state === 'ACCESS_DENIED')
+      return host
+        ? `❌ Нет прав на просмотр служб сервера ${this.serverTitle}. Бот должен работать под учётной записью, у которой есть права администратора на этом сервере (см. README).`
+        : '❌ Нет прав на просмотр этой службы. Запустите бота от администратора.';
+    return undefined;
+  }
+
   private statusText(): string {
     const items = this.watcher.view();
-    const lines = [`🖥 <b>${esc(this.opts.serverName)}</b>`, ''];
+    const lines = [`🖥 ${this.serverTitle}`, ''];
+    if (this.watcher.hostDown()) lines.push('🔴 <b>Сервер недоступен</b> — ниже последнее известное состояние', '');
     if (items.length === 0) {
       lines.push('Список служб пуст. Добавьте: /add <code>имя</code>');
       return lines.join('\n');
@@ -135,7 +159,7 @@ export class CommandBot {
   }
 
   private register(bot: Telegraf): void {
-    bot.start((ctx) => reply(ctx, `👋 Бот следит за службами Windows на сервере <b>${esc(this.opts.serverName)}</b>.\n\n${HELP}`));
+    bot.start((ctx) => reply(ctx, `👋 Бот следит за службами Windows на сервере ${this.serverTitle}.\n\n${HELP}`));
     bot.help((ctx) => reply(ctx, HELP));
 
     bot.command('status', (ctx) => reply(ctx, this.statusText()));
@@ -146,7 +170,9 @@ export class CommandBot {
       if (!isValidServiceName(name)) return reply(ctx, 'Недопустимое имя. Нужно короткое имя службы без пробелов. Найти его: /find <code>текст</code>');
       if (this.store.get(name)) return reply(ctx, `Служба <code>${esc(name)}</code> уже в списке.`);
 
-      const state = await queryService(name);
+      const state = await queryService(name, this.opts.targetHost);
+      const hint = this.accessHint(state);
+      if (hint) return reply(ctx, hint);
       if (state === 'NOT_FOUND') return reply(ctx, `❌ Служба <code>${esc(name)}</code> не найдена на сервере. Найти имя: /find <code>текст</code>`);
 
       const label = rest.join(' ').slice(0, 64) || name;
@@ -169,7 +195,14 @@ export class CommandBot {
     bot.command('find', async (ctx) => {
       const text = args(ctx).join(' ');
       if (text.length < 2) return reply(ctx, 'Укажите часть имени: /find <code>quik</code>');
-      const found = await findServices(text);
+      let found;
+      try {
+        found = await findServices(text, this.opts.targetHost);
+      } catch (err) {
+        if (err instanceof ServiceQueryError) return reply(ctx, this.accessHint(err.state) ?? `❌ ${esc(err.message)}`);
+        if (this.opts.targetHost) return reply(ctx, this.accessHint('UNREACHABLE')!);
+        throw err;
+      }
       if (found.length === 0) return reply(ctx, `Ничего не найдено по «${esc(text)}».`);
       const lines = found.slice(0, 25).map((s) => `• <code>${esc(s.name)}</code> — ${esc(s.displayName)}${this.store.get(s.name) ? ' ✔️' : ''}`);
       if (found.length > 25) lines.push(`…и ещё ${found.length - 25}, уточните запрос`);

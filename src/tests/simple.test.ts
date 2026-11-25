@@ -6,6 +6,7 @@ import path from 'node:path';
 import { isValidServiceName, parseScList, parseScQuery, ServiceStore } from '../services.js';
 import { applyCheck, newTracked } from '../watcher.js';
 import { esc, formatTransition } from '../bot.js';
+import { isValidHost } from '../exec.js';
 
 test('parseScQuery: английский и русский вывод, коды ошибок', () => {
   assert.equal(parseScQuery('        STATE              : 4  RUNNING\n', 0), 'RUNNING');
@@ -13,6 +14,24 @@ test('parseScQuery: английский и русский вывод, коды 
   assert.equal(parseScQuery('', 1060), 'NOT_FOUND');
   assert.equal(parseScQuery('', 5), 'ACCESS_DENIED');
   assert.equal(parseScQuery('мусор', 0), 'UNKNOWN');
+  // удалённый сервер не отвечает
+  assert.equal(parseScQuery('', 1722), 'UNREACHABLE');
+  assert.equal(parseScQuery('', 53), 'UNREACHABLE');
+});
+
+test('isValidHost: имя или IP без спецсимволов', () => {
+  assert.ok(isValidHost('172.23.10.82'));
+  assert.ok(isValidHost('quik-srv01.corp.local'));
+  assert.ok(!isValidHost('a b'));
+  assert.ok(!isValidHost('host&calc'));
+  assert.ok(!isValidHost('\\\\host'));
+  assert.ok(!isValidHost(''));
+});
+
+test('formatTransition: сообщения о недоступности сервера', () => {
+  const srv = { name: '172.23.10.82', label: 'Сервер' };
+  assert.match(formatTransition({ kind: 'down', service: srv, state: 'UNREACHABLE', at: 0, host: true }, 'QUIK', 'Asia/Bishkek'), /Сервер недоступен/);
+  assert.match(formatTransition({ kind: 'up', service: srv, at: 60_000, downSince: 0, host: true }, 'QUIK', 'Asia/Bishkek'), /Сервер снова доступен[\s\S]*1 мин 0 с/);
 });
 
 test('parseScList: имя и отображаемое имя без привязки к языку подписей', () => {

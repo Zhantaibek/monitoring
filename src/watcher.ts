@@ -1,4 +1,4 @@
-import { errMsg, type Logger } from './logger.js';
+import type { Logger } from './logger.js';
 import { queryService, stateRu, type ServiceState, type ServiceStore, type WatchedService } from './services.js';
 
 /** Сколько проверок подряд нужно, чтобы считать службу упавшей или восстановленной (защита от ложных срабатываний). */
@@ -19,7 +19,10 @@ export interface ServiceView extends WatchedService {
   down: boolean;
 }
 
-export type Transition = { kind: 'down'; service: WatchedService; state: ServiceState; at: number } | { kind: 'up'; service: WatchedService; at: number; downSince: number };
+/** host=true — событие о самом сервере (недоступен / снова доступен), service.name = адрес сервера. */
+export type Transition =
+  | { kind: 'down'; service: WatchedService; state: ServiceState; at: number; host?: boolean }
+  | { kind: 'up'; service: WatchedService; at: number; downSince: number; host?: boolean };
 
 /** Применяет результат одной проверки. Возвращает событие, если состояние подтвердилось. */
 export function applyCheck(t: Tracked, state: ServiceState, now: number, service: WatchedService): Transition | undefined {
@@ -55,6 +58,8 @@ export function newTracked(): Tracked {
 /** Периодически проверяет все службы из списка и сообщает о падении/восстановлении. */
 export class Watcher {
   private tracked = new Map<string, Tracked>();
+  /** Доступность удалённого сервера (только при TARGET_HOST) */
+  private hostTracked = newTracked();
   private timer?: NodeJS.Timeout;
   private running = false;
   lastCheckAt?: number;
@@ -64,6 +69,7 @@ export class Watcher {
     private readonly intervalSec: number,
     private readonly onTransition: (t: Transition) => void,
     private readonly log: Logger,
+    private readonly host?: string,
   ) {}
 
   start(): void {
@@ -79,17 +85,23 @@ export class Watcher {
     this.timer = undefined;
   }
 
+  private emit(ev: Transition | undefined, state: ServiceState): void {
+    if (!ev) return;
+    this.log.info({ target: ev.service.name, host: ev.host ?? false, event: ev.kind, state: stateRu(state) }, 'Смена состояния');
+    this.onTransition(ev);
+  }
+
   async checkAll(): Promise<void> {
     if (this.running) return;
     this.running = true;
     try {
+      let hostReachable = true;
       for (const s of this.store.list()) {
-        let state: ServiceState;
-        try {
-          state = await queryService(s.name);
-        } catch (err) {
-          this.log.warn({ service: s.name, err: errMsg(err) }, 'Не удалось опросить службу');
-          state = 'UNKNOWN';
+        const state = await queryService(s.name, this.host);
+        if (state === 'UNREACHABLE') {
+          // Сервер не отвечает: состояние служб неизвестно, тревожим одним сообщением о сервере
+          hostReachable = false;
+          break;
         }
         const key = s.name.toLowerCase();
         let t = this.tracked.get(key);
@@ -97,16 +109,22 @@ export class Watcher {
           t = newTracked();
           this.tracked.set(key, t);
         }
-        const ev = applyCheck(t, state, Date.now(), s);
-        if (ev) {
-          this.log.info({ service: s.name, event: ev.kind, state: stateRu(state) }, 'Смена состояния службы');
-          this.onTransition(ev);
-        }
+        this.emit(applyCheck(t, state, Date.now(), s), state);
+      }
+      if (this.host && this.store.list().length > 0) {
+        const hostState: ServiceState = hostReachable ? 'RUNNING' : 'UNREACHABLE';
+        const ev = applyCheck(this.hostTracked, hostState, Date.now(), { name: this.host, label: 'Сервер' });
+        this.emit(ev && { ...ev, host: true }, hostState);
       }
       this.lastCheckAt = Date.now();
     } finally {
       this.running = false;
     }
+  }
+
+  /** Сервер подтверждённо недоступен */
+  hostDown(): boolean {
+    return this.hostTracked.down;
   }
 
   forget(name: string): void {

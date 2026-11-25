@@ -12,6 +12,7 @@ export type ServiceState =
   | 'PAUSED'
   | 'NOT_FOUND'
   | 'ACCESS_DENIED'
+  | 'UNREACHABLE'
   | 'UNKNOWN';
 
 const STATE_RU: Record<ServiceState, string> = {
@@ -24,6 +25,7 @@ const STATE_RU: Record<ServiceState, string> = {
   PAUSED: 'приостановлена',
   NOT_FOUND: 'не найдена',
   ACCESS_DENIED: 'нет доступа',
+  UNREACHABLE: 'сервер недоступен',
   UNKNOWN: 'неизвестно',
 };
 
@@ -43,13 +45,35 @@ export function isValidServiceName(name: string): boolean {
 export function parseScQuery(out: string, exitCode: number): ServiceState {
   if (exitCode === 1060) return 'NOT_FOUND';
   if (exitCode === 5) return 'ACCESS_DENIED';
+  if (UNREACHABLE_CODES.has(exitCode)) return 'UNREACHABLE';
   const m = /:\s*\d+\s+(STOPPED|START_PENDING|STOP_PENDING|RUNNING|CONTINUE_PENDING|PAUSE_PENDING|PAUSED)\b/.exec(out);
   return m ? (m[1] as ServiceState) : 'UNKNOWN';
 }
 
-export async function queryService(name: string): Promise<ServiceState> {
-  const res = await runSc(['queryex', name], 10_000);
-  return parseScQuery(res.stdout, res.exitCode);
+/**
+ * Коды Windows, означающие, что удалённый сервер не отвечает:
+ * 53 сетевой путь не найден, 1722 RPC-сервер недоступен, 1727 вызов RPC не выполнен, 1753 нет конечных точек RPC.
+ */
+const UNREACHABLE_CODES = new Set([53, 1722, 1727, 1753]);
+
+/** Ожидание ответа удалённого сервера. sc сам ждёт ~40 с, если сервер выключен — обрываем раньше. */
+const QUERY_TIMEOUT_MS = 15_000;
+
+/** host — удалённый сервер; пусто — этот компьютер. Таймаут считается недоступностью сервера. */
+export async function queryService(name: string, host?: string): Promise<ServiceState> {
+  try {
+    const res = await runSc(['queryex', name], QUERY_TIMEOUT_MS, host);
+    return parseScQuery(res.stdout, res.exitCode);
+  } catch {
+    return host ? 'UNREACHABLE' : 'UNKNOWN';
+  }
+}
+
+/** Ошибка доступа к списку служб (нет прав / сервер недоступен). */
+export class ServiceQueryError extends Error {
+  constructor(readonly state: ServiceState) {
+    super(stateRu(state));
+  }
 }
 
 export interface InstalledService {
@@ -75,8 +99,10 @@ export function parseScList(out: string): InstalledService[] {
 }
 
 /** Поиск установленных служб по части имени или отображаемого имени. */
-export async function findServices(text: string): Promise<InstalledService[]> {
-  const res = await runSc(['query', 'type=', 'service', 'state=', 'all'], 20_000);
+export async function findServices(text: string, host?: string): Promise<InstalledService[]> {
+  const res = await runSc(['query', 'type=', 'service', 'state=', 'all'], 30_000, host);
+  const state = parseScQuery('', res.exitCode);
+  if (res.exitCode !== 0 && state !== 'UNKNOWN') throw new ServiceQueryError(state);
   const q = text.toLowerCase();
   return parseScList(res.stdout).filter((s) => s.name.toLowerCase().includes(q) || s.displayName.toLowerCase().includes(q));
 }

@@ -10,8 +10,9 @@ async function runOnce(): Promise<void> {
   const env = loadEnv(false);
   const store = new ServiceStore(path.join(env.dataDir, 'services.json'), env.seedConfigPath);
   const list = store.list();
+  console.log(`Сервер: ${env.targetHost ?? 'этот компьютер'}`);
   if (list.length === 0) console.log('Список служб пуст. Добавьте службы командой /add в Telegram.');
-  for (const s of list) console.log(`${s.label} (${s.name}): ${stateRu(await queryService(s.name))}`);
+  for (const s of list) console.log(`${s.label} (${s.name}): ${stateRu(await queryService(s.name, env.targetHost))}`);
 }
 
 async function main(): Promise<void> {
@@ -23,16 +24,16 @@ async function main(): Promise<void> {
   log.info({ pid: process.pid, node: process.version }, 'Запуск мониторинга');
 
   const store = new ServiceStore(path.join(env.dataDir, 'services.json'), env.seedConfigPath);
-  const botOpts = { token: env.botToken, adminIds: env.adminIds, proxyUrl: env.proxyUrl, serverName: env.serverName, timezone: env.timezone, log };
+  const botOpts = { token: env.botToken, adminIds: env.adminIds, proxyUrl: env.proxyUrl, serverName: env.serverName, targetHost: env.targetHost, timezone: env.timezone, log };
   const send = createSender(botOpts);
   const notify = (html: string) => void send(html).catch((err) => log.error({ err: errMsg(err) }, 'Ошибка отправки'));
 
-  const watcher = new Watcher(store, env.intervalSec, (t) => notify(formatTransition(t, env.serverName, env.timezone)), log);
+  const watcher = new Watcher(store, env.intervalSec, (t) => notify(formatTransition(t, env.serverName, env.timezone)), log, env.targetHost);
   const bot = new CommandBot(botOpts, store, watcher);
 
   const count = store.list().length;
   notify(
-    `🔵 <b>Мониторинг запущен</b>\nСервер: ${esc(env.serverName)}\nСлужб под наблюдением: ${count}` +
+    `🔵 <b>Мониторинг запущен</b>\nСервер: ${esc(env.serverName)}${env.targetHost ? ` (<code>${esc(env.targetHost)}</code>)` : ''}\nСлужб под наблюдением: ${count}` +
       (count === 0 ? '\n\nСписок пуст — добавьте службы: /add <code>имя</code>' : '\n\n/status — текущее состояние'),
   );
 

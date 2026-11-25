@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { isValidHost } from './exec.js';
 
 /** Корень приложения: dist/config.js -> .. */
 export const APP_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -10,6 +11,8 @@ export interface AppEnv {
   adminIds: number[];
   proxyUrl?: string;
   serverName: string;
+  /** Сервер, службы которого проверяются (имя или IP). undefined — этот компьютер. */
+  targetHost?: string;
   timezone: string;
   intervalSec: number;
   dataDir: string;
@@ -50,6 +53,9 @@ export function loadEnv(requireTelegram: boolean): AppEnv {
     throw new Error(`Неизвестный часовой пояс TIMEZONE=${timezone}`);
   }
 
+  const targetHost = e.TARGET_HOST?.trim().replace(/^\\\\/, '') || undefined;
+  if (targetHost && !isValidHost(targetHost)) throw new Error(`TARGET_HOST: недопустимое имя или адрес сервера "${targetHost}"`);
+
   const intervalSec = Number(e.CHECK_INTERVAL_SEC?.trim() || 30);
   if (!Number.isInteger(intervalSec) || intervalSec < 5) throw new Error('CHECK_INTERVAL_SEC должен быть целым числом ≥ 5');
 
@@ -58,6 +64,7 @@ export function loadEnv(requireTelegram: boolean): AppEnv {
     adminIds,
     proxyUrl: e.TELEGRAM_PROXY_URL?.trim() || undefined,
     serverName: e.SERVER_NAME?.trim() || 'QUIK Production',
+    targetHost,
     timezone,
     intervalSec,
     dataDir: resolveFromRoot(e.DATA_DIR?.trim() || 'data'),
