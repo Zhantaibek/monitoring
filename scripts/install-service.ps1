@@ -4,8 +4,8 @@
 
 .DESCRIPTION
   Что делает скрипт (и ничего больше):
-    1. Проверяет наличие файлов приложения, portable Node.js, WinSW, .env, config.json.
-    2. Выполняет однократную read-only проверку конфигурации (dist\index.js --once).
+    1. Проверяет наличие файлов приложения, portable Node.js, WinSW, .env.
+    2. Выполняет однократную проверку служб из списка (dist\index.js --once).
     3. Назначает права ТОЛЬКО на папку приложения: служба может писать в data\ и logs\,
        .env читают только Administrators, SYSTEM и учётная запись службы.
     4. Регистрирует службу QuikMonitor (WinSW) с автозапуском и перезапуском при сбое.
@@ -33,7 +33,7 @@ function Step($m) { Write-Host "==> $m" -ForegroundColor Cyan }
 function Fail($m) { Write-Host "ОШИБКА: $m" -ForegroundColor Red; exit 1 }
 
 Step 'Проверка файлов'
-foreach ($p in @($node, $winsw, (Join-Path $root 'service\QuikMonitor.xml'), (Join-Path $root 'dist\index.js'), (Join-Path $root '.env'), (Join-Path $root 'config\config.json'), (Join-Path $root 'node_modules'))) {
+foreach ($p in @($node, $winsw, (Join-Path $root 'service\QuikMonitor.xml'), (Join-Path $root 'dist\index.js'), (Join-Path $root '.env'),(Join-Path $root 'node_modules'))) {
   if (-not (Test-Path $p)) { Fail "не найден $p" }
 }
 $ver = (& $node --version).Trim()

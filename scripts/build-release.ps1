@@ -4,8 +4,8 @@
 
 .DESCRIPTION
   1. npm ci + сборка TypeScript + модульные тесты.
-  2. Копирует в release\quik-server-monitor только необходимое: dist (без тестов),
-     production node_modules (чистый JS, без нативных модулей), config, scripts, service, docs.
+  2. Копирует в release\quik-server-monitor только необходимое: dist,
+     production node_modules, scripts, service.
   3. Опционально распаковывает portable Node.js (zip с nodejs.org) в runtime\.
   4. Создаёт zip и выводит SHA256 для контроля целостности при переносе на сервер.
 
@@ -34,8 +34,7 @@ try {
   Get-ChildItem (Join-Path $out 'dist') -Recurse -Include '*.test.js', '*.test.js.map' | Remove-Item -Force
   Remove-Item (Join-Path $out 'dist\tests') -Recurse -Force -ErrorAction SilentlyContinue
   foreach ($f in 'package.json', 'package-lock.json', '.env.example', 'README.md') { Copy-Item $f $out }
-  foreach ($d in 'config', 'scripts', 'service', 'docs') { Copy-Item $d $out -Recurse }
-  Remove-Item (Join-Path $out 'config\config.json') -ErrorAction SilentlyContinue
+  foreach ($d in 'scripts', 'service') { Copy-Item $d $out -Recurse }
   Remove-Item (Join-Path $out 'scripts\build-release.ps1')
 
   Push-Location $out
